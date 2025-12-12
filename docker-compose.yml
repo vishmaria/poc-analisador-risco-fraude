@@ -1,0 +1,46 @@
+
+services:
+  fraud-predictor:
+    build: 
+      context: ./python
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./datasets:/app/datasets:ro
+      - ./models:/app/models:ro
+    environment:
+      - MODEL_PATH=/app/models/best_fraud_model.pkl
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - fraud-net
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./n8n_data/workflows:/home/node/.n8n/workflows:ro
+      # - ./fraud-pipeline.json:/home/node/.n8n/workflows/fraud-pipeline.json:ro
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - N8N_RUNNERS_ENABLED=true
+    depends_on:
+      fraud-predictor:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fraud-net
+
+networks:
+  fraud-net:
+    driver: bridge

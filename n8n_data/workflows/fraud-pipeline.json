@@ -1,0 +1,175 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fraud-pipeline",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        128,
+        -272
+      ],
+      "id": "3895dfe7-d7e0-447e-887f-64ff053c7b3f",
+      "webhookId": "37909a75-4e93-4524-af50-58b622133cd2"
+    },
+    {
+      "parameters": {
+        "model": "groq/compound",
+        "options": {}
+      },
+      "name": "Groq LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1008,
+        192
+      ],
+      "id": "0283d90d-d999-4c14-94a7-e69d805b4311",
+      "credentials": {
+        "groqApi": {
+          "id": "WehkfqoqXLKuZQvl",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Você é um assistente especializado em análise de risco de fraude.\n\nCONTEXTOS DISPONÍVEIS:\n- Dataset:\n  {{ $json.datasetSummary.values()}}\n- Modelo:\n  {{ $json.modelResults.values()}}\n- Validação:\n  {{ $json.validationMetrics.values()}}\n- Pergunta do usuário:\n  \"{{ $json.userQuestion }}\"\n\n\nREGRAS GERAIS:\n1. Responda SEMPRE em português.\n2. Adapte a forma da resposta à pergunta do usuário.\n3. Seja direto e contextualizado, sem repetir todo o resumo técnico se não for necessário.\n\nCASOS ESPECÍFICOS IMPORTANTES:\n\nA) Se a pergunta for algo como\n   - \"Qual é o score de risco geral atual?\"\n   - \"Qual o nível de risco geral?\"\n   - \"Qual é o risco atual?\"\n   então:\n   - Identifique o campo de risco global:\n       • Se existir json.recommendations.risklevel, use esse valor.\n       • Caso não exista, derive o nível de risco a partir de json.validationMetrics.roc_auc:\n           - rocauc >= 0.92 → risco \"low\"\n           - 0.85 <= rocauc < 0.92 → risco \"medium\"\n           - rocauc < 0.85 → risco \"high\"\n   - Responda APENAS em uma frase simples, por exemplo:\n       \"O score de risco geral atual é medium.\"\n   - NÃO traga análises longas, nem bullet points, nem outros números.\n\nB) Se a pergunta for sobre threshold (ex.: \"Qual é o threshold ótimo?\"):\n   - Use validationMetrics.thresholdoptimal.\n   - Responda de forma direta, ex.:\n       \"O threshold ótimo atual é 0.423.\"\n\nC) Para perguntas genéricas ou abertas:\n   - Aí sim você pode devolver um resumo analítico mais detalhado:\n       - análise textual\n       - nível de risco (low/medium/high)\n       - threshold\n       - 3 insights principais em lista.\n\nFORMATO DA RESPOSTA:\n- Não retorne JSON nem código.\n- Retorne apenas texto simples, já pronto para exibição na interface.",
+        "batching": {}
+      },
+      "name": "LLM Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        1024,
+        -64
+      ],
+      "id": "4032ed71-c3da-42b9-a399-f95d0d6d9d88"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format UI - VERSÃO FINAL FUNCIONAL (n8n Code v2)\nconst items = $input.all();\nconst inputData = items[0]?.json || {};\n\n// NOVO: Verifica se é análise de transação\nif (inputData.isTransactionAnalysis && inputData.fraud_probability !== undefined) {\n    const prob = inputData.fraud_probability * 100;\n    const riskLevel = inputData.risk_level;\n    const isFraud = inputData.is_fraud;\n    \n    return {\n        json: {\n            message: `🔍 **Análise de Transação Concluída**\\n\\n` +\n                     `Valor: $${inputData.transaction.amount.toLocaleString()}\\n` +\n                     `Tipo: ${inputData.transaction.type}\\n\\n` +\n                     `📊 **Resultado:**\\n` +\n                     `- Probabilidade de Fraude: ${prob.toFixed(2)}%\\n` +\n                     `- Classificação: ${isFraud ? '⚠️ FRAUDE' : '✅ LEGÍTIMA'}\\n` +\n                     `- Nível de Risco: ${riskLevel.toUpperCase()}\\n` +\n                     `- Confiança: ${(inputData.confidence * 100).toFixed(1)}%`,\n            riskLevel: riskLevel,\n            fraud_probability: inputData.fraud_probability,\n            timestamp: new Date().toLocaleTimeString(\"pt-BR\")\n        }\n    };\n}\n\n// Fluxo original para perguntas gerais...\n\nconst llmResponse = items.find(item => item.json.text)?.json?.text || \"Análise padrão\";\n\nconst source = inputData.source || \"chat\";\nconst userQuestion = (inputData.userQuestion || \"\").toLowerCase();\n\n// PRIORIDADE 1: Quick Actions Específicos (SOBRESCREVE LLM)\nif (source === \"quick-action\") {\n  \n  // Score de risco geral\n  if (userQuestion.includes(\"score\") && \n      userQuestion.includes(\"risco\") && \n      userQuestion.includes(\"geral\")) {\n    const rocAuc = inputData.validationMetrics?.roc_auc || 0.9245;\n    const riskLevel = rocAuc >= 0.92 ? \"low\" : rocAuc >= 0.85 ? \"medium\" : \"high\";\n    return {\n      json: {\n        message: `O score de risco geral atual é ${riskLevel}.`,\n        riskLevel,\n        roc_auc: rocAuc,\n        timestamp: new Date().toLocaleTimeString(\"pt-BR\")\n      }\n    };\n  }\n  \n  // Threshold ótimo\n  if (userQuestion.includes(\"threshold\") || userQuestion.includes(\"limite ótimo\")) {\n    const threshold = inputData.validationMetrics?.threshold_optimal || 0.423;\n    return {\n      json: {\n        message: `O threshold ótimo atual é ${threshold}.`,\n        riskLevel: \"medium\",\n        threshold,\n        timestamp: new Date().toLocaleTimeString(\"pt-BR\")\n      }\n    };\n  }\n  \n  // Alertas ativos\n  if (userQuestion.includes(\"alertas\") && userQuestion.includes(\"ativo\")) {\n    return {\n      json: {\n        message: \"Monitoramento ativo para CASH_OUT (maior risco). Threshold: 0.423. ROC-AUC: 0.9245.\",\n        riskLevel: \"medium\",\n        timestamp: new Date().toLocaleTimeString(\"pt-BR\")\n      }\n    };\n  }\n}\n\n// PRIORIDADE 2: Fallback para LLM (Chat normal)\nreturn {\n  json: {\n    message: llmResponse,\n    riskLevel: \"medium\",\n    timestamp: new Date().toLocaleTimeString(\"pt-BR\"),\n    roc_auc: inputData.validationMetrics?.roc_auc || 0.9245,\n    threshold: inputData.validationMetrics?.threshold_optimal || 0.423\n  }\n};\n"
+      },
+      "name": "Format UI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        -64
+      ],
+      "id": "392bbe77-2950-4769-b506-eff90a52cae6"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Transaction Data (novo nó Code)\nconst webhookData = $input.all()[0]?.json || {};\nconst message = webhookData.userQuestion || webhookData.message || '';\n\n// Detecta se é requisição de análise de transação\nconst isTransactionAnalysis = message.toLowerCase().includes('analisar transação') || \n                               message.toLowerCase().includes('verificar risco');\n\nif (!isTransactionAnalysis) {\n    // Fluxo normal (insights gerais)\n    return $input.all();\n}\n\n// Extrai dados da transação\nconst transactionData = {\n    amount: webhookData.amount || extractAmount(message),\n    type: webhookData.type || extractType(message),\n    newBalanceDest: webhookData.newBalanceDest || 0\n};\n\nfunction extractAmount(text) {\n    const match = text.match(/\\$?\\s*(\\d+[\\d.,]*)/);\n    return match ? parseFloat(match[1].replace(',', '')) : null;\n}\n\nfunction extractType(text) {\n    const types = ['CASH_IN', 'CASH_OUT', 'DEBIT', 'PAYMENT', 'TRANSFER'];\n    for (const type of types) {\n        if (text.toUpperCase().includes(type)) return type;\n    }\n    return 'TRANSFER'; // default\n}\n\nreturn [{\n    json: {\n        ...webhookData,\n        transactionData,\n        isTransactionAnalysis: true\n    }\n}];\n"
+      },
+      "name": "Parse Transaction Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        -272
+      ],
+      "id": "f00bb46b-6090-48b2-bcff-70e8aa7ed0bc"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5000/predict",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "amount",
+              "value": "={{ $json.transactionData.amount }}"
+            },
+            {
+              "name": "type",
+              "value": "={{ $json.transactionData.type }}"
+            },
+            {
+              "name": "newBalanceDest",
+              "value": "={{ $json.transactionData.newBalanceDest }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        -272
+      ],
+      "id": "3db8ee1b-49c9-4e12-8a15-76f5a1700052",
+      "name": "HTTP Request"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Transaction Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Format UI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Transaction Data": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "ec44a468d14972d8cb42393260e9f5b216ab4de03d175a518576bcfe38fd852c"
+  }
+}
